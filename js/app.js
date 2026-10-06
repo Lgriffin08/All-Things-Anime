@@ -55,6 +55,7 @@ const state = {
   feedError: '',
   location: loadLocation(),
   user: null,
+  profile: null,
 };
 
 // ---------- DOM ----------
@@ -68,6 +69,7 @@ const els = {
   seasonGrid: $('#seasonGrid'), seasonTitle: $('#seasonTitle'),
   watchChips: $('#watchChips'), watchGrid: $('#watchGrid'), watchCount: $('#watchCount'),
   toast: $('#toast'),
+  profileBody: $('#profileBody'),
   accountBtn: $('#accountBtn'), authDialog: $('#authDialog'), authBody: $('#authBody'),
 };
 
@@ -585,6 +587,7 @@ function watchlistChanged() {
   updateFollowButtons();
   renderWatchCount();
   if (state.view === 'watchlist') renderWatchlist();
+  if (state.view === 'profile') renderProfile();
 }
 
 function updateFollowButtons() {
@@ -697,7 +700,13 @@ let authMode = 'signin';
 function displayName() {
   const u = state.user;
   if (!u) return '';
-  return (u.user_metadata?.first_name || '').trim() || u.email.split('@')[0];
+  return (state.profile?.display_name || '').trim() || (u.user_metadata?.first_name || '').trim() || u.email.split('@')[0];
+}
+
+function avatarHtml(cls = '') {
+  const url = safeUrl(state.profile?.avatar_url || '');
+  if (url) return `<img class="avatar-img ${cls}" src="${esc(url)}" alt="" />`;
+  return esc(displayName()[0]?.toUpperCase() || '★');
 }
 
 function renderAccountButton() {
@@ -706,7 +715,7 @@ function renderAccountButton() {
   if (state.user) {
     const name = displayName();
     els.accountBtn.classList.add('is-signed-in');
-    avatar.textContent = name[0]?.toUpperCase() || '★';
+    avatar.innerHTML = avatarHtml();
     label.textContent = name;
     els.accountBtn.setAttribute('aria-label', `Account: ${state.user.email}`);
   } else {
@@ -782,12 +791,13 @@ function renderAuth() {
     html = `<h2 id="authTitle">Your account</h2><p class="auth-sub">Your watchlist is saved to your account.</p>
       <div class="auth-account">
         <div class="auth-account__row">
-          <span class="account-btn__avatar" aria-hidden="true">${esc(displayName()[0]?.toUpperCase() || '★')}</span>
-          <div><div class="auth-account__email">${esc(state.user.email)}</div><div class="muted">${n} show${n === 1 ? '' : 's'} on your watchlist</div></div>
+          <span class="account-btn__avatar" aria-hidden="true">${avatarHtml()}</span>
+          <div><div class="auth-account__name">${esc(displayName())}${state.profile?.username ? ` <span class="muted">@${esc(state.profile.username)}</span>` : ''}</div><div class="auth-account__email">${esc(state.user.email)}</div><div class="muted">${n} show${n === 1 ? '' : 's'} on your watchlist</div></div>
         </div>
         ${msg}
+        <a class="btn btn--primary" href="#profile" data-auth-close>✏️ View &amp; edit profile</a>
         <button type="button" class="btn btn--ghost" data-auth-mode="recovery">Change password</button>
-        <button type="button" class="btn btn--primary" data-auth-action="signout">Sign out</button>
+        <button type="button" class="btn btn--ghost" data-auth-action="signout">Sign out</button>
       </div>`;
   }
   els.authBody.innerHTML = html;
@@ -857,7 +867,11 @@ function onAuthChange(event, session) {
       toast(`Signed in as ${state.user.email}`);
     }
     syncWatchlist();
+    loadProfile();
   } else if (!state.user && prevId) {
+    state.profile = null;
+    profileDraft = null;
+    if (state.view === 'profile') renderProfile();
     state.watchlist = loadWatchlist();
     watchlistChanged();
     toast('Signed out');
@@ -898,10 +912,260 @@ function initAccount() {
   });
 }
 
+// ---------- Profile ----------
+const GENRES = ['Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Horror', 'Mahou Shoujo', 'Mecha', 'Music',
+  'Mystery', 'Psychological', 'Romance', 'Sci-Fi', 'Slice of Life', 'Sports', 'Supernatural', 'Thriller'];
+const MAX_GENRES = 10;
+let profileDraft = null;   // unsaved edits
+let profileLoading = false;
+let profileError = '';
+
+async function loadProfile() {
+  profileLoading = true;
+  profileError = '';
+  if (state.view === 'profile') renderProfile();
+  try {
+    state.profile = await auth.getProfile();
+  } catch (e) {
+    profileError = e.message;
+  }
+  profileLoading = false;
+  renderAccountButton();
+  renderGreeting();
+  if (state.view === 'profile') renderProfile();
+  if (els.authDialog.open && authMode === 'account') renderAuth();
+}
+
+function memberSince(iso) {
+  return iso ? new Date(iso).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) : '';
+}
+
+function renderProfile() {
+  if (!state.user) {
+    els.profileBody.innerHTML = emptyState('🪪', 'Create your anime profile',
+      'Sign in or create a free account to set up your profile with a photo, bio and favorite genres.',
+      '<button type="button" class="btn btn--primary" data-action="signin">Sign in or create account</button>');
+    return;
+  }
+  if (!state.profile) {
+    els.profileBody.innerHTML = profileError
+      ? emptyState('⚠️', "Couldn't load your profile", profileError, '<button type="button" class="btn btn--primary" data-action="profile-retry">Try again</button>')
+      : '<div class="profile-card skeleton"><div class="sk-line" style="width:40%;height:20px"></div><div class="sk-line" style="width:70%;margin-top:12px"></div></div>';
+    return;
+  }
+  const p = state.profile;
+  const d = profileDraft || (profileDraft = {
+    display_name: p.display_name || '', username: p.username || '', bio: p.bio || '',
+    favorite_anime: p.favorite_anime || '', favorite_genres: [...(p.favorite_genres || [])],
+  });
+  const genres = p.favorite_genres || [];
+  const watchTitles = [...new Set(state.watchlist.map(w => w.title))];
+  els.profileBody.innerHTML = `
+    <div class="profile-layout">
+      <article class="profile-card profile-card--summary">
+        <div class="profile-cover" aria-hidden="true"></div>
+        <div class="profile-avatar" id="profileAvatar">${avatarHtml()}</div>
+        <h2 class="profile-name">${esc(displayName())}</h2>
+        ${p.username ? `<p class="profile-handle">@${esc(p.username)}</p>` : '<p class="profile-handle muted">No username yet</p>'}
+        ${p.bio ? `<p class="profile-bio">${esc(p.bio)}</p>` : '<p class="profile-bio muted">Add a bio to tell other fans about yourself.</p>'}
+        <dl class="profile-stats">
+          <div><dt>Watchlist</dt><dd>${state.watchlist.length}</dd></div>
+          <div><dt>Favorite</dt><dd>${p.favorite_anime ? esc(p.favorite_anime) : '—'}</dd></div>
+          <div><dt>Member since</dt><dd>${esc(memberSince(p.created_at))}</dd></div>
+        </dl>
+        ${genres.length ? `<div class="profile-genres">${genres.map(g => `<span>${esc(g)}</span>`).join('')}</div>` : ''}
+      </article>
+
+      <form class="profile-card profile-form" id="profileForm" novalidate>
+        <h2>Edit profile</h2>
+
+        <div class="profile-photo">
+          <div class="profile-avatar profile-avatar--sm">${avatarHtml()}</div>
+          <div class="profile-photo__actions">
+            <label class="btn btn--ghost btn--sm">📷 ${p.avatar_url ? 'Change photo' : 'Upload photo'}
+              <input type="file" accept="image/png,image/jpeg,image/webp" data-profile-photo hidden />
+            </label>
+            ${p.avatar_url ? '<button type="button" class="btn btn--ghost btn--sm" data-profile-action="remove-photo">Remove</button>' : ''}
+            <small class="muted">JPG, PNG or WebP. We'll crop it to a square.</small>
+          </div>
+        </div>
+
+        <label class="auth-field">Display name
+          <input name="display_name" maxlength="40" value="${esc(d.display_name)}" placeholder="${esc((state.user.user_metadata?.first_name || '').trim() || 'Your name')}" />
+          <small>Used in your greeting. Up to 40 characters.</small>
+        </label>
+
+        <label class="auth-field">Username
+          <div class="input-prefix"><span>@</span><input name="username" maxlength="20" value="${esc(d.username)}" placeholder="otaku_owl" autocapitalize="none" autocomplete="username" spellcheck="false" /></div>
+          <small>3–20 characters: lowercase letters, numbers and underscores.</small>
+        </label>
+
+        <label class="auth-field">Bio
+          <textarea name="bio" rows="3" maxlength="280" placeholder="What are you watching this season?">${esc(d.bio)}</textarea>
+          <small><span data-bio-count>${d.bio.length}</span>/280</small>
+        </label>
+
+        <label class="auth-field">Favorite anime of all time
+          <input name="favorite_anime" maxlength="100" value="${esc(d.favorite_anime)}" list="favAnimeOptions" placeholder="e.g. Fullmetal Alchemist: Brotherhood" />
+          <datalist id="favAnimeOptions">${watchTitles.map(t => `<option value="${esc(t)}"></option>`).join('')}</datalist>
+        </label>
+
+        <fieldset class="auth-field profile-genre-picker">
+          <legend>Favorite genres <small>(up to ${MAX_GENRES})</small></legend>
+          <div class="chips chips--wrap">
+            ${GENRES.map(g => `<button type="button" class="chip" data-genre="${esc(g)}" aria-pressed="${d.favorite_genres.includes(g)}">${esc(g)}</button>`).join('')}
+          </div>
+        </fieldset>
+
+        <p class="auth-msg" data-profile-msg role="alert" hidden></p>
+        <div class="profile-form__actions">
+          <button type="button" class="btn btn--ghost" data-profile-action="reset">Discard changes</button>
+          <button type="submit" class="btn btn--primary">Save profile</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+function profileMessage(text, kind = 'error') {
+  const box = els.profileBody.querySelector('[data-profile-msg]');
+  if (!box) return toast(text);
+  box.hidden = !text;
+  box.className = `auth-msg auth-msg--${kind}`;
+  box.textContent = text || '';
+}
+
+function validateProfile(d) {
+  if (d.username && !/^[a-z0-9_]{3,20}$/.test(d.username)) return 'Usernames are 3–20 characters: lowercase letters, numbers and underscores.';
+  if (d.display_name.length > 40) return 'Display name can be up to 40 characters.';
+  if (d.bio.length > 280) return 'Your bio can be up to 280 characters.';
+  if (d.favorite_genres.length > MAX_GENRES) return `Pick up to ${MAX_GENRES} favorite genres.`;
+  return '';
+}
+
+async function saveProfile(form) {
+  const d = profileDraft;
+  const fields = {
+    display_name: d.display_name.trim() || null,
+    username: d.username.trim().toLowerCase() || null,
+    bio: d.bio.trim() || null,
+    favorite_anime: d.favorite_anime.trim() || null,
+    favorite_genres: d.favorite_genres,
+  };
+  const problem = validateProfile({ ...d, username: fields.username || '' });
+  if (problem) { profileMessage(problem); return; }
+  const btn = form.querySelector('button[type="submit"]');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  try {
+    state.profile = await auth.updateProfile(fields);
+    profileDraft = null;
+    renderAccountButton();
+    renderGreeting();
+    renderProfile();
+    toast('Profile saved ✓');
+  } catch (e) {
+    profileMessage(e.message);
+    btn.disabled = false;
+    btn.textContent = 'Save profile';
+  }
+}
+
+// Crop to a centered square and resize to 256px so uploads stay small and fast.
+function resizeImage(file, size = 256) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const side = Math.min(img.naturalWidth, img.naturalHeight);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(blob => {
+        if (blob && blob.type === 'image/webp') return resolve(blob);
+        canvas.toBlob(b => (b ? resolve(b) : reject(new Error('Could not process that image.'))), 'image/jpeg', 0.88);
+      }, 'image/webp', 0.88);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('That file isn’t a supported image.')); };
+    img.src = url;
+  });
+}
+
+async function changePhoto(input) {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  if (!/^image\/(png|jpeg|webp)$/.test(file.type)) { profileMessage('Please choose a JPG, PNG or WebP image.'); return; }
+  if (file.size > 15 * 1024 * 1024) { profileMessage('That image is too large. Please pick one under 15 MB.'); return; }
+  const avatar = els.profileBody.querySelector('#profileAvatar');
+  avatar?.classList.add('is-busy');
+  profileMessage('');
+  try {
+    const blob = await resizeImage(file);
+    const avatar_url = await auth.uploadAvatar(blob);
+    state.profile = await auth.updateProfile({ avatar_url });
+    renderAccountButton();
+    renderProfile();
+    toast('Profile photo updated ✓');
+  } catch (e) {
+    avatar?.classList.remove('is-busy');
+    profileMessage(e.message);
+  }
+}
+
+async function removePhoto() {
+  try {
+    await auth.removeAvatar();
+    state.profile = await auth.updateProfile({ avatar_url: null });
+    renderAccountButton();
+    renderProfile();
+    toast('Profile photo removed');
+  } catch (e) {
+    profileMessage(e.message);
+  }
+}
+
+function initProfile() {
+  els.profileBody.addEventListener('input', e => {
+    const f = e.target;
+    if (!profileDraft || !f.name || !(f.name in profileDraft)) return;
+    if (f.name === 'username') {
+      const clean = f.value.toLowerCase().replace(/[^a-z0-9_]/g, '');
+      if (clean !== f.value) f.value = clean;
+    }
+    profileDraft[f.name] = f.value;
+    if (f.name === 'bio') els.profileBody.querySelector('[data-bio-count]').textContent = f.value.length;
+  });
+  els.profileBody.addEventListener('change', e => {
+    if (e.target.matches('[data-profile-photo]')) changePhoto(e.target);
+  });
+  els.profileBody.addEventListener('submit', e => {
+    e.preventDefault();
+    saveProfile(e.target);
+  });
+  els.profileBody.addEventListener('click', e => {
+    const genre = e.target.closest('[data-genre]');
+    if (genre && profileDraft) {
+      const g = genre.dataset.genre;
+      const list = profileDraft.favorite_genres;
+      if (list.includes(g)) profileDraft.favorite_genres = list.filter(x => x !== g);
+      else if (list.length >= MAX_GENRES) { profileMessage(`You can pick up to ${MAX_GENRES} genres.`); return; }
+      else profileDraft.favorite_genres = [...list, g];
+      genre.setAttribute('aria-pressed', String(profileDraft.favorite_genres.includes(g)));
+      return;
+    }
+    const action = e.target.closest('[data-profile-action]')?.dataset.profileAction;
+    if (action === 'reset') { profileDraft = null; renderProfile(); }
+    else if (action === 'remove-photo') removePhoto();
+  });
+}
+
 // ---------- Routing ----------
 function route() {
   const view = (location.hash.replace('#', '') || 'news');
-  state.view = ['news', 'seasonal', 'watchlist'].includes(view) ? view : 'news';
+  state.view = ['news', 'seasonal', 'watchlist', 'profile'].includes(view) ? view : 'news';
   document.querySelectorAll('[data-view-panel]').forEach(p => { p.hidden = p.dataset.viewPanel !== state.view; });
   document.querySelectorAll('.tab').forEach(t => {
     if (t.dataset.view === state.view) t.setAttribute('aria-current', 'page');
@@ -910,6 +1174,7 @@ function route() {
   if (state.view === 'seasonal') renderSeason();
   if (state.view === 'watchlist') renderWatchlist();
   if (state.view === 'news') renderNews();
+  if (state.view === 'profile') renderProfile();
 }
 
 // ---------- Global events ----------
@@ -932,6 +1197,8 @@ function initEvents() {
       renderSeason();
     } else if (t.dataset.action === 'refresh') loadFeed({ force: true });
     else if (t.dataset.action === 'season-retry') renderSeason();
+    else if (t.dataset.action === 'signin') openAuth('signin');
+    else if (t.dataset.action === 'profile-retry') loadProfile();
   });
   els.refreshBtn.addEventListener('click', () => { loadFeed({ force: true }); loadWeather(); });
   window.addEventListener('hashchange', route);
@@ -949,6 +1216,7 @@ function initEvents() {
 // ---------- Boot ----------
 initTheme();
 initAccount();
+initProfile();
 renderGreeting();
 initWeather();
 initSearch();

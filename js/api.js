@@ -69,6 +69,7 @@ async function anilist(query, variables, { ttl = 60 * 60 * 1000, force = false }
 
 // ---------- helpers ----------
 export function safeUrl(u) {
+  if (!u || !String(u).trim()) return null;
   try {
     const url = new URL(u, location.href);
     return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;

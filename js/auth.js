@@ -91,3 +91,71 @@ export function saveWatchItems(items) {
 
 export const removeWatchItem = id =>
   call(() => client.from('watchlist').delete().eq('anime_id', id));
+
+// ---------- Profiles ----------
+const PROFILE_FIELDS = 'id, display_name, username, bio, avatar_url, favorite_anime, favorite_genres, created_at';
+
+async function currentUserId() {
+  const { data } = await client.auth.getSession();
+  const id = data.session?.user?.id;
+  if (!id) throw new Error('Please sign in first.');
+  return id;
+}
+
+function profileError(error) {
+  const code = error?.code;
+  const msg = error?.message || '';
+  if (code === '23505' || /profiles_username_key|duplicate key/i.test(msg)) return 'That username is already taken. Try another one.';
+  if (code === '23514' || /violates check constraint/i.test(msg)) {
+    if (/username/i.test(msg)) return 'Usernames are 3–20 characters: lowercase letters, numbers and underscores.';
+    if (/bio/i.test(msg)) return 'Your bio can be up to 280 characters.';
+    if (/display_name/i.test(msg)) return 'Display name can be up to 40 characters.';
+    if (/favorite_genres/i.test(msg)) return 'Pick up to 10 favorite genres.';
+    return 'One of the fields isn’t valid. Please check and try again.';
+  }
+  return friendly(error);
+}
+
+export async function getProfile() {
+  const id = await currentUserId();
+  const { data, error } = await client.from('profiles').select(PROFILE_FIELDS).eq('id', id).maybeSingle();
+  if (error) throw new Error(profileError(error));
+  if (data) return data;
+  // Safety net: the sign-up trigger normally creates this row.
+  const { data: created, error: insErr } = await client.from('profiles').insert({ id }).select(PROFILE_FIELDS).single();
+  if (insErr) throw new Error(profileError(insErr));
+  return created;
+}
+
+export async function updateProfile(fields) {
+  const id = await currentUserId();
+  const { data, error } = await client.from('profiles').update(fields).eq('id', id).select(PROFILE_FIELDS).single();
+  if (error) throw new Error(profileError(error));
+  return data;
+}
+
+// Stores the (already resized) image at avatars/{user_id}/avatar.{ext} and returns its public URL.
+export async function uploadAvatar(blob) {
+  const id = await currentUserId();
+  const ext = blob.type === 'image/webp' ? 'webp' : blob.type === 'image/png' ? 'png' : 'jpg';
+  const bucket = client.storage.from('avatars');
+  // Remove any previous avatar with a different extension.
+  const { data: existing } = await bucket.list(id);
+  const stale = (existing || []).map(f => `${id}/${f.name}`).filter(p => p !== `${id}/avatar.${ext}`);
+  if (stale.length) await bucket.remove(stale);
+  const path = `${id}/avatar.${ext}`;
+  const { error } = await bucket.upload(path, blob, { upsert: true, contentType: blob.type, cacheControl: '3600' });
+  if (error) throw new Error(friendly(error));
+  return `${bucket.getPublicUrl(path).data.publicUrl}?v=${Date.now()}`;
+}
+
+export async function removeAvatar() {
+  const id = await currentUserId();
+  const bucket = client.storage.from('avatars');
+  const { data: existing } = await bucket.list(id);
+  const paths = (existing || []).map(f => `${id}/${f.name}`);
+  if (paths.length) {
+    const { error } = await bucket.remove(paths);
+    if (error) throw new Error(friendly(error));
+  }
+}

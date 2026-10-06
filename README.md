@@ -11,6 +11,7 @@ The latest anime news, announcements, trailers, delays, streaming updates and se
 - **Seasonal lineup**: what's airing now and what's coming next, with scores, genres and broadcast times.
 - **Watchlist**: follow your favorite shows and see news about only them. Saved in your browser.
 - **Accounts (email login)**: sign up, sign in, forgot/reset password and change password, powered by Supabase Auth. Signed-in users' watchlists are saved to their account and follow them to any device. Shows followed before signing in are merged into the account.
+- **Profiles**: every account gets a profile page (`#profile`) with a photo (cropped and resized in the browser before upload), display name, unique @username, bio, favorite anime and up to 10 favorite genres. The display name is used in the greeting and the account button shows the photo.
 - **Greeting**: a time-of-day greeting for Latrell (in English and Japanese).
 - **Live weather** from Open-Meteo. Defaults to Boca Raton (FAU), and you can change the city.
 - **Themes**: Light, Dark or System (follows your device).
@@ -29,6 +30,8 @@ The latest anime news, announcements, trailers, delays, streaming updates and se
 ## Supabase setup
 
 - **Database**: a `public.watchlist` table (`user_id`, `anime_id`, `title`, `image`, `titles`, `created_at`) with row-level security, so each user can only read and change their own rows.
+- **Profiles**: a `public.profiles` table (one row per user, created automatically by a trigger on sign-up and seeded with the first name). Usernames are unique (case-insensitive) and every field has length checks in the database. RLS lets users read and edit only their own profile.
+- **Avatars**: a public `avatars` storage bucket (2 MB limit, JPG/PNG/WebP). Each user can only write inside their own folder (`avatars/{user_id}/`).
 - **Keys**: `js/auth.js` contains the project URL and the *publishable* key. It's designed to be public; RLS protects the data. Never put the `service_role`/secret key in the site.
 - **Required dashboard setting**: Authentication → URL Configuration → set **Site URL** to the Netlify URL and add `https://<your-site>.netlify.app/**` under **Redirect URLs**, so confirmation and password-reset emails link back to the site.
 - **Email limits**: Supabase's built-in email sender only sends a few emails per hour (sign-up confirmations and password resets). Signing in with a password sends no email. For more volume, add custom SMTP under Authentication → Emails, or turn off "Confirm email" under Authentication → Sign In / Providers → Email.
@@ -59,6 +62,6 @@ css/styles.css    # theme tokens (light/dark), responsive layout
 js/api.js         # RSS news, AniList and Open-Meteo data layer (with caching)
 netlify/functions/feed.mjs  # server-side RSS relay at /api/feed
 js/app.js         # state, rendering, search, watchlist, account UI, themes, greeting, weather
-js/auth.js        # Supabase email login + watchlist sync
+js/auth.js        # Supabase email login, watchlist sync, profiles and avatar uploads
 netlify.toml      # Netlify config
 ```
