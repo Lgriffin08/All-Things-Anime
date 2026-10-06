@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en" data-theme-pref="system">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>All Things Anime</title>
+  <meta name="description" content="The latest anime news, announcements, trailers, delays, streaming updates and seasonal lineups — all in one place." />
+  <meta name="theme-color" content="#0f0d1a" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    (function () {
+      var pref = 'system';
+      try { pref = localStorage.getItem('ata.theme') || 'system'; } catch (e) {}
+      var dark = pref === 'dark' || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.dataset.themePref = pref;
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    })();
+  </script>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="topbar__inner">
+      <a class="brand" href="#news" aria-label="All Things Anime home">
+        <span class="brand__mark" aria-hidden="true">✦</span>
+        <span class="brand__text">All Things <b>Anime</b></span>
+      </a>
+
+      <nav class="tabs" aria-label="Sections">
+        <a class="tab" href="#news" data-view="news">News</a>
+        <a class="tab" href="#seasonal" data-view="seasonal">Seasonal</a>
+        <a class="tab" href="#watchlist" data-view="watchlist">Watchlist <span class="tab__count" id="watchCount" hidden></span></a>
+      </nav>
+
+      <div class="theme-switch" role="radiogroup" aria-label="Theme">
+        <button type="button" role="radio" data-theme-choice="light" title="Light theme" aria-label="Light theme">☀️</button>
+        <button type="button" role="radio" data-theme-choice="dark" title="Dark theme" aria-label="Dark theme">🌙</button>
+        <button type="button" role="radio" data-theme-choice="system" title="Match system" aria-label="System theme">💻</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" class="container">
+    <!-- Greeting + weather -->
+    <section class="hero" aria-labelledby="greeting">
+      <div class="hero__text">
+        <p class="hero__jp" id="greetingJp" lang="ja"></p>
+        <h1 id="greeting">Welcome, Latrell</h1>
+        <p class="hero__sub" id="greetingSub">Here's what's new across the anime world.</p>
+      </div>
+      <aside class="weather" id="weather" aria-live="polite">
+        <div class="weather__loading">Loading weather…</div>
+      </aside>
+    </section>
+
+    <!-- NEWS VIEW -->
+    <section class="view" id="view-news" data-view-panel="news">
+      <form class="search" id="searchForm" role="search">
+        <span class="search__icon" aria-hidden="true">🔎</span>
+        <input id="searchInput" type="search" placeholder="Search news about any anime… (e.g. One Piece, Frieren)" autocomplete="off" aria-label="Search anime news" />
+        <button type="button" class="search__clear" id="searchClear" aria-label="Clear search" hidden>✕</button>
+        <button type="submit" class="btn btn--primary">Search</button>
+      </form>
+
+      <div class="chips" id="categoryChips" role="tablist" aria-label="News categories"></div>
+
+      <div class="feed-meta">
+        <p id="feedStatus" class="muted" aria-live="polite"></p>
+        <button type="button" class="btn btn--ghost" id="refreshBtn"><span aria-hidden="true">⟳</span> Refresh</button>
+      </div>
+
+      <div id="searchAnime" class="anime-strip" hidden></div>
+      <div id="newsGrid" class="news-grid" aria-busy="true"></div>
+    </section>
+
+    <!-- SEASONAL VIEW -->
+    <section class="view" id="view-seasonal" data-view-panel="seasonal" hidden>
+      <div class="view-head">
+        <div>
+          <h2 id="seasonTitle">This Season</h2>
+          <p class="muted">Tap ☆ Follow to add a show to your watchlist.</p>
+        </div>
+        <div class="segmented" role="tablist" aria-label="Season">
+          <button type="button" role="tab" data-season="now" aria-selected="true">Airing now</button>
+          <button type="button" role="tab" data-season="upcoming" aria-selected="false">Coming next</button>
+        </div>
+      </div>
+      <div id="seasonGrid" class="anime-grid" aria-busy="true"></div>
+    </section>
+
+    <!-- WATCHLIST VIEW -->
+    <section class="view" id="view-watchlist" data-view-panel="watchlist" hidden>
+      <div class="view-head">
+        <div>
+          <h2>Your Watchlist</h2>
+          <p class="muted">News about only the shows you follow.</p>
+        </div>
+      </div>
+      <div id="watchChips" class="watch-chips"></div>
+      <div id="watchGrid" class="news-grid"></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>News from <a href="https://www.animenewsnetwork.com/" target="_blank" rel="noopener">Anime News Network</a> &amp; <a href="https://myanimelist.net/news" target="_blank" rel="noopener">MyAnimeList</a> via the <a href="https://jikan.moe/" target="_blank" rel="noopener">Jikan API</a>. Weather by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>.</p>
+    <p class="muted">Made for Latrell · Go Owls 🦉</p>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

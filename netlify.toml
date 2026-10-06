@@ -1,0 +1,36 @@
+# Netlify config: static site, no build step required.
+[build]
+  publish = "."
+  command = ""
+
+# Proxy the Anime News Network RSS feed through Netlify so the browser
+# can read it without CORS errors. The app requests /api/ann.
+[[redirects]]
+  from = "/api/ann"
+  to = "https://www.animenewsnetwork.com/all/rss.xml?ann-edition=us"
+  status = 200
+  force = true
+  [redirects.headers]
+    User-Agent = "AllThingsAnime/1.0 (+netlify)"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Frame-Options = "SAMEORIGIN"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/js/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/css/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
