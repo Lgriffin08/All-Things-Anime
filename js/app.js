@@ -1,12 +1,11 @@
 import {
-  fetchAnnNews, fetchAnimeNews, fetchSeason, searchAnime,
+  fetchFeed, fetchSeason, searchAnime,
   fetchWeather, geocode, DEFAULT_LOCATION, safeUrl,
 } from './api.js';
 
 const USER_NAME = 'Latrell';
 const REFRESH_MS = 10 * 60 * 1000;     // auto-refresh feed + weather every 10 minutes
 const DAY_MS = 24 * 60 * 60 * 1000;
-const FEATURED_SHOWS = 6;              // how many top airing shows to pull MAL news for
 
 // ---------- Categories ----------
 const CATEGORIES = [
@@ -54,7 +53,6 @@ const state = {
   loadingFeed: false,
   feedError: '',
   location: loadLocation(),
-  watchNewsCache: new Map(),
 };
 
 // ---------- DOM ----------
@@ -77,7 +75,7 @@ function store(key, value) { try { localStorage.setItem(key, JSON.stringify(valu
 function read(key, fallback) {
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
 }
-function loadWatchlist() { const w = read('ata.watchlist', []); return Array.isArray(w) ? w : []; }
+function loadWatchlist() { const w = read('ata.watchlist.v2', []); return Array.isArray(w) ? w : []; }
 function loadLocation() { const l = read('ata.location', null); return l && typeof l.latitude === 'number' ? l : DEFAULT_LOCATION; }
 
 function timeAgo(iso) {
@@ -145,7 +143,7 @@ function enrich(items) {
     const out = { ...it, ...categorize(it) };
     if (!out.image) {
       const match = shows.find(a => matchesAnime(it, a));
-      if (match) out.image = match.image;
+      if (match) out.image = match.banner || match.image;
     }
     return out;
   });
@@ -402,7 +400,9 @@ function renderNews() {
     } else if (state.feedError && !state.feed.length) {
       els.newsGrid.innerHTML = emptyState('📡', "Couldn't load the news", state.feedError, '<button type="button" class="btn btn--primary" data-action="refresh">Try again</button>');
     } else if (state.query) {
-      els.newsGrid.innerHTML = emptyState('🔍', `No news found for “${state.query}”`, 'Try another title, or a different spelling (English or Japanese).');
+      els.newsGrid.innerHTML = emptyState('🔍', `No recent news for “${state.query}”`,
+        'The feed covers the latest stories from Anime News Network and MyAnimeList. For older coverage, search the archives:',
+        `<div class="empty__links">${archiveLinks(state.searchAnime[0]?.title || state.query)}</div>`);
     } else {
       els.newsGrid.innerHTML = emptyState('🗂️', 'Nothing in this category yet', 'Check back soon, or browse all news.', '<button type="button" class="chip" data-cat="all">Show all news</button>');
     }
@@ -429,32 +429,19 @@ async function loadFeed({ force = false } = {}) {
   state.feedError = '';
   renderNews();
 
-  let ann = [];
-  let mal = [];
-  const errors = [];
+  // ANN + MAL news feeds and the seasonal list (used for artwork matching) all load in parallel.
+  const parts = { ann: [], mal: [] };
+  const merge = () => { state.feed = dedupeSort(enrich([...parts.ann, ...parts.mal])); renderNews(); };
+  const feedPs = Object.keys(parts).map(src => fetchFeed(src, { force })
+    .then(items => { parts[src] = items; merge(); })
+    .catch(() => {}));
+  const seasonP = (state.seasonNow ? Promise.resolve(state.seasonNow) : fetchSeason('now'))
+    .then(data => { state.seasonNow = data; indexAnime(data.list); })
+    .catch(() => {});
 
-  // ANN and the seasonal list load in parallel; MAL per-show news follows once we know the top shows.
-  const annP = fetchAnnNews({ force }).then(items => {
-    ann = items;
-    state.feed = dedupeSort(enrich([...ann, ...mal]));
-    state.loadingFeed = true;
-    renderNews();
-  }).catch(e => errors.push(e));
+  await Promise.all([...feedPs, seasonP]);
 
-  const malP = (async () => {
-    try {
-      const { list, season } = await fetchSeason('now', { force: false });
-      state.seasonNow = { list, season };
-      indexAnime(list);
-      const top = [...list].sort((a, b) => b.members - a.members).slice(0, FEATURED_SHOWS);
-      const results = await Promise.allSettled(top.map(a => fetchAnimeNews(a, { force })));
-      for (const r of results) if (r.status === 'fulfilled') mal.push(...r.value);
-    } catch (e) { errors.push(e); }
-  })();
-
-  await Promise.all([annP, malP]);
-
-  state.feed = dedupeSort(enrich([...ann, ...mal]));
+  state.feed = dedupeSort(enrich([...parts.ann, ...parts.mal]));
   state.loadingFeed = false;
   if (!state.feed.length) state.feedError = 'The news sources did not respond. Check your connection and try again.';
   else state.lastUpdated = new Date();
@@ -486,17 +473,12 @@ async function runSearch(q) {
     state.searchAnime = found;
     indexAnime(found);
     renderSearchAnime();
-    // Pull dedicated news for the best two matches.
-    const results = await Promise.allSettled(found.slice(0, 2).map(a => fetchAnimeNews(a)));
-    if (token !== searchToken) return;
-    const extra = results.flatMap(r => (r.status === 'fulfilled' ? r.value : []));
-    // Also include any ANN stories that mention the matched titles.
-    const annHits = state.feed.filter(it => found.slice(0, 2).some(a => matchesAnime(it, a)));
-    state.searchNews = enrich([...extra, ...annHits]);
+    // Include stories that mention any title or alias of the best matches (English, romaji, Japanese).
+    state.searchNews = state.feed.filter(it => found.slice(0, 3).some(a => matchesAnime(it, a)));
     renderNews();
   } catch {
     if (token !== searchToken) return;
-    els.searchAnime.innerHTML = '<span class="anime-strip__label">Anime lookup is unavailable right now, so these results come from the latest headlines only.</span>';
+    els.searchAnime.innerHTML = '<span class="anime-strip__label">Anime lookup is unavailable right now. These results only search the latest headlines.</span>';
   }
 }
 
@@ -550,6 +532,13 @@ function initSearch() {
   });
 }
 
+function archiveLinks(title) {
+  const q = encodeURIComponent(title);
+  return `<p class="empty__link-row"><b>${esc(title)}</b>
+    <a href="https://www.animenewsnetwork.com/search?q=${q}" target="_blank" rel="noopener noreferrer">ANN archive ↗</a>
+    <a href="https://myanimelist.net/news/search?q=${q}" target="_blank" rel="noopener noreferrer">MAL news ↗</a></p>`;
+}
+
 // ---------- Watchlist ----------
 const isFollowing = id => state.watchlist.some(w => w.id === id);
 
@@ -571,7 +560,7 @@ function toggleFollow(id) {
     state.watchlist.push({ id: a.id, title: a.title, image: a.image, titles: a.titles });
     toast(`Following ${a.title} ★`);
   }
-  store('ata.watchlist', state.watchlist);
+  store('ata.watchlist.v2', state.watchlist);
   updateFollowButtons();
   renderWatchCount();
   if (state.view === 'watchlist') renderWatchlist();
@@ -592,8 +581,7 @@ function renderWatchCount() {
   els.watchCount.textContent = n;
 }
 
-let watchToken = 0;
-async function renderWatchlist() {
+function renderWatchlist() {
   const list = state.watchlist;
   els.watchChips.innerHTML = list.map(a => `
     <span class="watch-chip">
@@ -608,25 +596,16 @@ async function renderWatchlist() {
     return;
   }
 
-  const token = ++watchToken;
-  const fromFeed = state.feed.filter(it => list.some(a => matchesAnime(it, a)));
-  const cached = list.flatMap(a => state.watchNewsCache.get(a.id) || []);
-  const show = items => {
-    const all = dedupeSort(enrich([...fromFeed, ...items]));
-    els.watchGrid.innerHTML = all.length ? all.map(newsCard).join('')
-      : emptyState('🕊️', 'No news for your shows yet', 'We check Anime News Network and MyAnimeList, so new stories will show up here as they come out.');
-  };
-  const missing = list.filter(a => !state.watchNewsCache.has(a.id));
-  if (missing.length && !cached.length && !fromFeed.length) els.watchGrid.innerHTML = skeletons(3);
-  else show(cached);
-
-  if (!missing.length) return;
-  await Promise.allSettled(missing.map(async a => {
-    const items = await fetchAnimeNews(a);
-    state.watchNewsCache.set(a.id, items);
-  }));
-  if (token !== watchToken) return;
-  show(list.flatMap(a => state.watchNewsCache.get(a.id) || []));
+  const items = dedupeSort(enrich(state.feed.filter(it => list.some(a => matchesAnime(it, a)))));
+  if (items.length) {
+    els.watchGrid.innerHTML = items.map(newsCard).join('');
+  } else if (state.loadingFeed && !state.feed.length) {
+    els.watchGrid.innerHTML = skeletons(3);
+  } else {
+    els.watchGrid.innerHTML = emptyState('🕊️', 'No recent news for your shows',
+      'We check Anime News Network and MyAnimeList every 10 minutes, so new stories will show up here. You can also dig through the archives:',
+      `<div class="empty__links">${list.map(a => archiveLinks(a.title)).join('')}</div>`);
+  }
 }
 
 // ---------- Seasonal ----------
@@ -636,9 +615,15 @@ function seasonLabel(s) {
 }
 
 function animeCard(a, upcoming) {
+  const premiere = a.airedFrom && a.datePrecision !== 'year'
+    ? new Date(a.airedFrom).toLocaleDateString(undefined, a.datePrecision === 'day' ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'long', year: 'numeric' })
+    : null;
+  const next = a.nextEpisode
+    ? `Ep ${a.nextEpisode.episode} ${new Date(a.nextEpisode.at).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}`
+    : null;
   const meta = upcoming
-    ? [a.type, a.airedFrom ? `Premieres ${new Date(a.airedFrom).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}` : (a.season ? seasonLabel(a) : 'TBA')]
-    : [a.type, a.episodes ? `${a.episodes} eps` : null, a.broadcast];
+    ? [a.type, premiere ? `Premieres ${premiere}` : 'Date TBA']
+    : [a.type, a.episodes ? `${a.episodes} eps` : null, next];
   return `
     <article class="anime">
       <div class="anime__poster">
@@ -678,7 +663,7 @@ async function renderSeason() {
   els.seasonGrid.setAttribute('aria-busy', 'false');
   els.seasonTitle.textContent = tab === 'now'
     ? `Airing Now${season ? ' · ' + seasonLabel(season) : ''}`
-    : 'Coming Next';
+    : `Coming Next${season ? ' · ' + seasonLabel(season) : ''}`;
   const sorted = [...list].sort((a, b) => b.members - a.members);
   els.seasonGrid.innerHTML = sorted.length ? sorted.map(a => animeCard(a, tab === 'upcoming')).join('')
     : emptyState('🌸', 'No shows listed yet', 'Check back soon.');

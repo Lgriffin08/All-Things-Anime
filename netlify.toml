@@ -3,15 +3,10 @@
   publish = "."
   command = ""
 
-# Proxy the Anime News Network RSS feed through Netlify so the browser
-# can read it without CORS errors. The app requests /api/ann.
-[[redirects]]
-  from = "/api/ann"
-  to = "https://www.animenewsnetwork.com/all/rss.xml?ann-edition=us"
-  status = 200
-  force = true
-  [redirects.headers]
-    User-Agent = "AllThingsAnime/1.0 (+netlify)"
+[functions]
+  directory = "netlify/functions"
+
+# The news feeds are fetched by netlify/functions/feed.mjs, served at /api/feed.
 
 [[headers]]
   for = "/*"

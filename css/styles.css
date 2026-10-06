@@ -393,3 +393,8 @@ button { font: inherit; color: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* Archive links in empty states */
+.empty__links { display: grid; gap: 8px; justify-items: center; }
+.empty__link-row { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; align-items: center; margin: 0 !important; }
+.empty__link-row a { font-weight: 600; color: var(--accent); }

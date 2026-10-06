@@ -1,14 +1,17 @@
-// Data layer: Anime News Network RSS, Jikan (MyAnimeList) API, and Open-Meteo weather.
+// Data layer: Anime News Network + MyAnimeList RSS news, AniList anime data, Open-Meteo weather.
 // All sources are free and need no API key.
 
-const JIKAN = 'https://api.jikan.moe/v4';
-const ANN_RSS = 'https://www.animenewsnetwork.com/all/rss.xml?ann-edition=us';
-// On Netlify, /api/ann is proxied to the ANN feed (see netlify.toml) so the browser avoids CORS.
-// Locally (or if the proxy fails) we fall back to a public CORS proxy.
-const ANN_SOURCES = [
-  '/api/ann',
-  `https://api.allorigins.win/raw?url=${encodeURIComponent(ANN_RSS)}`,
-  `https://corsproxy.io/?url=${encodeURIComponent(ANN_RSS)}`,
+const ANILIST = 'https://graphql.anilist.co';
+const FEEDS = {
+  ann: { url: 'https://www.animenewsnetwork.com/all/rss.xml?ann-edition=us', name: 'Anime News Network' },
+  mal: { url: 'https://myanimelist.net/rss/news.xml', name: 'MyAnimeList' },
+};
+// On Netlify, /api/feed is a serverless function (netlify/functions/feed.mjs) that relays the
+// RSS feeds so the browser avoids CORS. If it's unavailable (e.g. local dev) we try public proxies.
+const feedSources = src => [
+  `/api/feed?src=${src}`,
+  `https://api.allorigins.win/raw?url=${encodeURIComponent(FEEDS[src].url)}`,
+  `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(FEEDS[src].url)}`,
 ];
 
 const CACHE_PREFIX = 'ata.cache.';
@@ -33,34 +36,35 @@ function cacheSet(key, value) {
   }
 }
 
-// ---------- Jikan request queue (rate limit: 3 req/s, 60 req/min) ----------
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-let jikanChain = Promise.resolve();
-let lastJikanCall = 0;
+// ---------- AniList GraphQL ----------
+const MEDIA_FIELDS = `
+  id idMal siteUrl format status episodes averageScore popularity genres synonyms
+  season seasonYear bannerImage
+  title { romaji english native }
+  coverImage { extraLarge large }
+  startDate { year month day }
+  nextAiringEpisode { airingAt episode }
+  studios(isMain: true) { nodes { name } }`;
 
-function jikan(path, { ttl = 10 * 60 * 1000, force = false } = {}) {
-  const key = 'jikan:' + path;
+async function anilist(query, variables, { ttl = 60 * 60 * 1000, force = false } = {}) {
+  const key = 'anilist:' + JSON.stringify(variables) + query.length;
   if (!force) {
     const hit = cacheGet(key, ttl);
-    if (hit) return Promise.resolve(hit);
+    if (hit) return hit;
   }
-  const run = async () => {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const wait = 400 - (Date.now() - lastJikanCall);
-      if (wait > 0) await sleep(wait);
-      lastJikanCall = Date.now();
-      const res = await fetch(JIKAN + path);
-      if (res.status === 429) { await sleep(1200 * (attempt + 1)); continue; }
-      if (!res.ok) throw new Error(`Jikan ${res.status}`);
-      const json = await res.json();
-      cacheSet(key, json);
-      return json;
-    }
-    throw new Error('Jikan rate limited');
-  };
-  const p = jikanChain.then(run, run);
-  jikanChain = p.catch(() => {});
-  return p;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(ANILIST, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ query, variables }),
+    });
+    if (res.status === 429) { await new Promise(r => setTimeout(r, 1500 * (attempt + 1))); continue; }
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.data) throw new Error(json?.errors?.[0]?.message || `AniList ${res.status}`);
+    cacheSet(key, json.data);
+    return json.data;
+  }
+  throw new Error('AniList rate limited');
 }
 
 // ---------- helpers ----------
@@ -84,58 +88,62 @@ function firstImageIn(html) {
   return img ? safeUrl(img.getAttribute('src')) : null;
 }
 
-function animeImage(a) {
-  return a?.images?.webp?.large_image_url || a?.images?.jpg?.large_image_url ||
-         a?.images?.webp?.image_url || a?.images?.jpg?.image_url || null;
-}
+const FORMAT = { TV: 'TV', TV_SHORT: 'TV Short', MOVIE: 'Movie', SPECIAL: 'Special', OVA: 'OVA', ONA: 'ONA', MUSIC: 'Music' };
+const STATUS = { RELEASING: 'Airing', FINISHED: 'Finished', NOT_YET_RELEASED: 'Upcoming', CANCELLED: 'Cancelled', HIATUS: 'Hiatus' };
 
-export function simplifyAnime(a) {
+export function simplifyAnime(m) {
+  const t = m.title || {};
+  const sd = m.startDate || {};
+  const airedFrom = sd.year && sd.month ? new Date(sd.year, sd.month - 1, sd.day || 1).toISOString() : null;
   return {
-    id: a.mal_id,
-    title: a.title_english || a.title,
-    altTitle: a.title_english && a.title !== a.title_english ? a.title : '',
-    titles: [a.title, a.title_english, a.title_japanese, ...(a.title_synonyms || [])].filter(Boolean),
-    image: animeImage(a),
-    url: a.url,
-    score: a.score,
-    episodes: a.episodes,
-    type: a.type,
-    status: a.status,
-    genres: (a.genres || []).map(g => g.name).slice(0, 3),
-    studios: (a.studios || []).map(s => s.name),
-    broadcast: a.broadcast?.string && a.broadcast.string !== 'Unknown' ? a.broadcast.string : '',
-    airedFrom: a.aired?.from || null,
-    members: a.members || 0,
-    season: a.season, year: a.year,
+    id: m.id,
+    title: t.english || t.romaji || t.native,
+    titles: [t.english, t.romaji, t.native, ...(m.synonyms || [])].filter(Boolean),
+    image: m.coverImage?.extraLarge || m.coverImage?.large || null,
+    banner: m.bannerImage || null,
+    url: m.siteUrl,
+    score: m.averageScore ? m.averageScore / 10 : null,
+    episodes: m.episodes,
+    type: FORMAT[m.format] || m.format,
+    status: STATUS[m.status] || m.status,
+    genres: (m.genres || []).slice(0, 3),
+    studios: (m.studios?.nodes || []).map(s => s.name),
+    nextEpisode: m.nextAiringEpisode ? { at: m.nextAiringEpisode.airingAt * 1000, episode: m.nextAiringEpisode.episode } : null,
+    airedFrom,
+    datePrecision: sd.day ? 'day' : sd.month ? 'month' : sd.year ? 'year' : null,
+    members: m.popularity || 0,
+    season: m.season ? m.season.toLowerCase() : null,
+    year: m.seasonYear || sd.year || null,
   };
 }
 
-// ---------- News: Anime News Network RSS ----------
-export async function fetchAnnNews({ force = false } = {}) {
-  const key = 'ann';
+// ---------- News: RSS feeds (ANN + MyAnimeList) ----------
+export async function fetchFeed(src, { force = false } = {}) {
+  const key = 'feed:' + src;
   if (!force) {
     const hit = cacheGet(key, 5 * 60 * 1000);
     if (hit) return hit;
   }
   let lastErr;
-  for (const src of ANN_SOURCES) {
+  for (const url of feedSources(src)) {
     try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 9000);
-      const res = await fetch(src, { signal: ctrl.signal, cache: 'no-store' });
-      clearTimeout(timer);
-      if (!res.ok) throw new Error(`ANN ${res.status}`);
-      const text = await res.text();
-      const items = parseRss(text);
-      if (!items.length) throw new Error('ANN feed empty');
+      const res = await fetch(url, { signal: AbortSignal.timeout(10000), cache: 'no-store' });
+      if (!res.ok) throw new Error(`${src} ${res.status}`);
+      const items = parseRss(await res.text(), FEEDS[src].name);
+      if (!items.length) throw new Error(`${src} feed empty`);
       cacheSet(key, items);
       return items;
     } catch (e) { lastErr = e; }
   }
-  throw lastErr || new Error('ANN unavailable');
+  // Last resort: serve a stale copy rather than nothing.
+  const stale = cacheGet(key, 7 * 24 * 60 * 60 * 1000);
+  if (stale) return stale;
+  throw lastErr || new Error(`${src} unavailable`);
 }
 
-function parseRss(xmlText) {
+export const fetchAllNews = opts => Promise.allSettled(Object.keys(FEEDS).map(src => fetchFeed(src, opts)));
+
+function parseRss(xmlText, source) {
   const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
   if (doc.querySelector('parsererror')) return [];
   return [...doc.querySelectorAll('item')].map(item => {
@@ -143,60 +151,56 @@ function parseRss(xmlText) {
     const descHtml = get('description');
     const media = item.getElementsByTagNameNS('*', 'thumbnail')[0] || item.getElementsByTagNameNS('*', 'content')[0];
     const enclosure = item.querySelector('enclosure[type^="image"]');
-    const image = safeUrl(media?.getAttribute('url') || enclosure?.getAttribute('url') || '') || firstImageIn(descHtml);
+    const mediaUrl = media?.getAttribute('url') || media?.textContent?.trim() || '';
+    const image = safeUrl(mediaUrl || enclosure?.getAttribute('url') || '') || firstImageIn(descHtml);
     const date = new Date(get('pubDate') || get('date'));
     return {
       id: get('guid') || get('link'),
       title: stripHtml(get('title')),
       summary: stripHtml(descHtml),
-      url: safeUrl(get('link')),
+      url: safeUrl(get('link').replace(/[?&]_location=rss$/, '')),
       image,
       date: isNaN(date) ? null : date.toISOString(),
-      source: 'Anime News Network',
+      source,
       tags: [...item.querySelectorAll('category')].map(c => c.textContent.trim()).filter(Boolean),
     };
   }).filter(i => i.title && i.url);
 }
 
-// ---------- News: MyAnimeList via Jikan ----------
-export async function fetchAnimeNews(anime, { force = false } = {}) {
-  const json = await jikan(`/anime/${anime.id}/news?page=1`, { force });
-  return (json.data || []).map(n => ({
-    id: n.url,
-    title: n.title,
-    summary: (n.excerpt || '').replace(/\s+/g, ' ').trim(),
-    url: safeUrl(n.url),
-    image: safeUrl(n.images?.jpg?.image_url || '') || anime.image,
-    date: n.date,
-    source: 'MyAnimeList',
-    tags: [],
-    anime: { id: anime.id, title: anime.title },
-  })).filter(i => i.title && i.url);
+// ---------- Anime lookups (AniList) ----------
+const SEASONS = ['WINTER', 'SPRING', 'SUMMER', 'FALL'];
+export function seasonFor(date = new Date(), offset = 0) {
+  let idx = Math.floor(date.getMonth() / 3) + offset;
+  const year = date.getFullYear() + Math.floor(idx / 4);
+  idx = ((idx % 4) + 4) % 4;
+  return { season: SEASONS[idx], year };
 }
 
-// ---------- Anime lookups ----------
 export async function fetchSeason(which = 'now', { force = false } = {}) {
-  // Two pages gives a fuller lineup; dedupe because Jikan can repeat entries.
-  const pages = [1, 2];
-  const seen = new Set();
-  const list = [];
-  let season = null;
-  for (const page of pages) {
-    const json = await jikan(`/seasons/${which}?sfw=true&page=${page}`, { ttl: 60 * 60 * 1000, force });
-    for (const a of json.data || []) {
-      if (seen.has(a.mal_id)) continue;
-      seen.add(a.mal_id);
-      list.push(simplifyAnime(a));
-      if (!season && a.season && a.year) season = { season: a.season, year: a.year };
+  const { season, year } = seasonFor(new Date(), which === 'now' ? 0 : 1);
+  const query = `query ($season: MediaSeason, $year: Int, $page: Int) {
+    Page(page: $page, perPage: 50) {
+      pageInfo { hasNextPage }
+      media(season: $season, seasonYear: $year, type: ANIME, isAdult: false, sort: POPULARITY_DESC) { ${MEDIA_FIELDS} }
     }
-    if (!json.pagination?.has_next_page) break;
+  }`;
+  const list = [];
+  for (const page of [1, 2]) {
+    const data = await anilist(query, { season, year, page }, { force });
+    list.push(...(data.Page?.media || []).map(simplifyAnime));
+    if (!data.Page?.pageInfo?.hasNextPage) break;
   }
-  return { season, list };
+  return { season: { season: season.toLowerCase(), year }, list };
 }
 
 export async function searchAnime(q) {
-  const json = await jikan(`/anime?q=${encodeURIComponent(q)}&limit=6&sfw=true&order_by=members&sort=desc`, { ttl: 30 * 60 * 1000 });
-  return (json.data || []).map(simplifyAnime);
+  const query = `query ($q: String) {
+    Page(perPage: 6) {
+      media(search: $q, type: ANIME, isAdult: false, sort: SEARCH_MATCH) { ${MEDIA_FIELDS} }
+    }
+  }`;
+  const data = await anilist(query, { q }, { ttl: 30 * 60 * 1000 });
+  return (data.Page?.media || []).map(simplifyAnime);
 }
 
 // ---------- Weather: Open-Meteo ----------
