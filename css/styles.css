@@ -398,3 +398,68 @@ button { font: inherit; color: inherit; }
 .empty__links { display: grid; gap: 8px; justify-items: center; }
 .empty__link-row { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; align-items: center; margin: 0 !important; }
 .empty__link-row a { font-weight: 600; color: var(--accent); }
+
+/* ---------- Account button ---------- */
+.account-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid var(--border); background: var(--bg-elev); cursor: pointer;
+  padding: 4px 12px 4px 4px; border-radius: 999px; font-weight: 600; font-size: .9rem;
+  transition: border-color .2s, box-shadow .2s; white-space: nowrap;
+}
+.account-btn:hover { border-color: var(--accent-2); box-shadow: var(--shadow); }
+.account-btn__avatar {
+  display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--bg-soft); font-size: .85rem;
+}
+.account-btn.is-signed-in .account-btn__avatar {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 800;
+}
+.account-btn__label { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Auth dialog ---------- */
+.auth-dialog {
+  width: min(420px, calc(100% - 32px)); padding: 28px 24px 24px;
+  border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px);
+  background: var(--bg-elev); color: var(--text);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .35);
+}
+.auth-dialog::backdrop { background: rgba(15, 13, 26, .55); backdrop-filter: blur(4px); }
+.auth-dialog__close {
+  position: absolute; top: 12px; right: 12px; width: 32px; height: 32px;
+  border: 0; border-radius: 50%; background: var(--bg-soft); cursor: pointer;
+}
+.auth-dialog h2 { font-size: 1.45rem; font-weight: 800; }
+.auth-dialog .auth-sub { margin: 6px 0 18px; color: var(--text-muted); font-size: .95rem; }
+.auth-tabs { display: flex; padding: 4px; gap: 4px; margin-bottom: 18px; background: var(--bg-soft); border-radius: 999px; }
+.auth-tabs button { flex: 1; border: 0; background: transparent; cursor: pointer; padding: 8px; border-radius: 999px; font-weight: 600; color: var(--text-muted); }
+.auth-tabs button[aria-selected="true"] { background: var(--bg-elev); color: var(--text); box-shadow: var(--shadow); }
+.auth-form { display: grid; gap: 14px; }
+.auth-field { display: grid; gap: 6px; font-weight: 600; font-size: .9rem; }
+.auth-field input {
+  padding: 11px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+  background: var(--bg); color: var(--text); font: inherit; font-weight: 400; font-size: 1rem;
+}
+.auth-field input:focus { outline: none; border-color: var(--accent-2); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-2) 25%, transparent); }
+.auth-field small { font-weight: 400; color: var(--text-muted); }
+.auth-form .btn { width: 100%; padding: 12px; }
+.auth-link { border: 0; background: none; padding: 0; cursor: pointer; color: var(--accent); font-weight: 600; font-size: .9rem; justify-self: start; }
+.auth-link:hover { text-decoration: underline; }
+.auth-msg { margin: 0; padding: 10px 12px; border-radius: var(--radius-sm); font-size: .9rem; }
+.auth-msg--error { background: color-mix(in srgb, #ff3b5c 14%, transparent); color: var(--text); border: 1px solid color-mix(in srgb, #ff3b5c 40%, transparent); }
+.auth-msg--ok { background: color-mix(in srgb, #00b894 14%, transparent); color: var(--text); border: 1px solid color-mix(in srgb, #00b894 40%, transparent); }
+.auth-account { display: grid; gap: 12px; }
+.auth-account__row { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: var(--radius-sm); background: var(--bg-soft); }
+.auth-account__row .account-btn__avatar { width: 44px; height: 44px; font-size: 1.2rem; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 800; }
+.auth-account__email { font-weight: 700; word-break: break-all; }
+
+@media (max-width: 720px) {
+  .account-btn { margin-left: auto; }
+  .topbar .theme-switch { margin-left: 0; }
+  .account-btn__label { max-width: 90px; }
+}
+@media (max-width: 440px) {
+  .account-btn { padding: 3px; }
+  .account-btn__label { display: none; }
+  .theme-switch button { width: 28px; }
+  .topbar__inner { gap: 8px; }
+}

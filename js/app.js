@@ -2,6 +2,7 @@ import {
   fetchFeed, fetchSeason, searchAnime,
   fetchWeather, geocode, DEFAULT_LOCATION, safeUrl,
 } from './api.js';
+import * as auth from './auth.js';
 
 const USER_NAME = 'Latrell';
 const REFRESH_MS = 10 * 60 * 1000;     // auto-refresh feed + weather every 10 minutes
@@ -53,6 +54,7 @@ const state = {
   loadingFeed: false,
   feedError: '',
   location: loadLocation(),
+  user: null,
 };
 
 // ---------- DOM ----------
@@ -66,6 +68,7 @@ const els = {
   seasonGrid: $('#seasonGrid'), seasonTitle: $('#seasonTitle'),
   watchChips: $('#watchChips'), watchGrid: $('#watchGrid'), watchCount: $('#watchCount'),
   toast: $('#toast'),
+  accountBtn: $('#accountBtn'), authDialog: $('#authDialog'), authBody: $('#authBody'),
 };
 
 // ---------- Utilities ----------
@@ -161,7 +164,8 @@ function renderGreeting() {
   else if (h >= 18 && h < 23) { en = 'Good evening'; jp = 'こんばんは'; emoji = '🌙'; }
   else { en = 'Up late'; jp = 'おつかれさま'; emoji = '🦉'; }
   els.greetingJp.textContent = `${jp} · ${emoji}`;
-  els.greeting.textContent = h >= 23 || h < 5 ? `${en}, ${USER_NAME}? Night-owl mode on.` : `${en}, ${USER_NAME}!`;
+  const name = displayName() || USER_NAME;
+  els.greeting.textContent = h >= 23 || h < 5 ? `${en}, ${name}? Night-owl mode on.` : `${en}, ${name}!`;
   const day = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
   els.greetingSub.textContent = `It's ${day}. Here's everything new across the anime world: announcements, releases, trailers and more.`;
 }
@@ -548,8 +552,10 @@ function followButton(a, small = false) {
     ${on ? '★ Following' : '☆ Follow'}</button>`;
 }
 
-function toggleFollow(id) {
+async function toggleFollow(id) {
   id = Number(id);
+  const before = state.watchlist;
+  let added = null;
   if (isFollowing(id)) {
     const a = state.watchlist.find(w => w.id === id);
     state.watchlist = state.watchlist.filter(w => w.id !== id);
@@ -557,10 +563,25 @@ function toggleFollow(id) {
   } else {
     const a = state.animeIndex.get(id);
     if (!a) return;
-    state.watchlist.push({ id: a.id, title: a.title, image: a.image, titles: a.titles });
+    added = { id: a.id, title: a.title, image: a.image, titles: a.titles };
+    state.watchlist = [...state.watchlist, added];
     toast(`Following ${a.title} ★`);
   }
-  store('ata.watchlist.v2', state.watchlist);
+  watchlistChanged();
+  if (!state.user) return;
+  // Signed in: save to the account (optimistic update, rolled back on failure).
+  try {
+    if (added) await auth.saveWatchItems([added]);
+    else await auth.removeWatchItem(id);
+  } catch (e) {
+    state.watchlist = before;
+    watchlistChanged();
+    toast(`Couldn't save to your account: ${e.message}`);
+  }
+}
+
+function watchlistChanged() {
+  if (!state.user) store('ata.watchlist.v2', state.watchlist);
   updateFollowButtons();
   renderWatchCount();
   if (state.view === 'watchlist') renderWatchlist();
@@ -669,6 +690,214 @@ async function renderSeason() {
     : emptyState('🌸', 'No shows listed yet', 'Check back soon.');
 }
 
+// ---------- Account (Supabase email login) ----------
+const initialHash = location.hash; // read before Supabase consumes auth tokens in the URL
+let authMode = 'signin';
+
+function displayName() {
+  const u = state.user;
+  if (!u) return '';
+  return (u.user_metadata?.first_name || '').trim() || u.email.split('@')[0];
+}
+
+function renderAccountButton() {
+  const label = els.accountBtn.querySelector('.account-btn__label');
+  const avatar = els.accountBtn.querySelector('.account-btn__avatar');
+  if (state.user) {
+    const name = displayName();
+    els.accountBtn.classList.add('is-signed-in');
+    avatar.textContent = name[0]?.toUpperCase() || '★';
+    label.textContent = name;
+    els.accountBtn.setAttribute('aria-label', `Account: ${state.user.email}`);
+  } else {
+    els.accountBtn.classList.remove('is-signed-in');
+    avatar.textContent = '👤';
+    label.textContent = 'Sign in';
+    els.accountBtn.setAttribute('aria-label', 'Sign in');
+  }
+}
+
+function openAuth(mode) {
+  authMode = mode || (state.user ? 'account' : 'signin');
+  renderAuth();
+  if (!els.authDialog.open) els.authDialog.showModal();
+  els.authBody.querySelector('input')?.focus();
+}
+
+function closeAuth() { if (els.authDialog.open) els.authDialog.close(); }
+
+function authMessage(text, kind = 'error') {
+  const box = els.authBody.querySelector('[data-auth-msg]');
+  if (!box) return;
+  box.hidden = !text;
+  box.className = `auth-msg auth-msg--${kind}`;
+  box.textContent = text || '';
+}
+
+function renderAuth() {
+  const email = esc(els.authBody.querySelector('input[name="email"]')?.value || '');
+  const msg = '<p class="auth-msg" data-auth-msg role="alert" hidden></p>';
+  const tabs = `
+    <div class="auth-tabs" role="tablist">
+      <button type="button" role="tab" data-auth-mode="signin" aria-selected="${authMode === 'signin'}">Sign in</button>
+      <button type="button" role="tab" data-auth-mode="signup" aria-selected="${authMode === 'signup'}">Create account</button>
+    </div>`;
+  const emailField = `<label class="auth-field">Email<input name="email" type="email" autocomplete="email" required value="${email}" /></label>`;
+  let html = '';
+  if (authMode === 'signin') {
+    html = `<h2 id="authTitle">Welcome back</h2><p class="auth-sub">Sign in to keep your watchlist on every device.</p>${tabs}
+      <form class="auth-form" data-auth-form="signin">
+        ${emailField}
+        <label class="auth-field">Password<input name="password" type="password" autocomplete="current-password" required /></label>
+        <button type="button" class="auth-link" data-auth-mode="forgot">Forgot password?</button>
+        ${msg}
+        <button type="submit" class="btn btn--primary">Sign in</button>
+      </form>`;
+  } else if (authMode === 'signup') {
+    html = `<h2 id="authTitle">Create your account</h2><p class="auth-sub">Save your watchlist and pick up where you left off anywhere.</p>${tabs}
+      <form class="auth-form" data-auth-form="signup">
+        <label class="auth-field">First name <small>(optional, for your greeting)</small><input name="firstName" type="text" autocomplete="given-name" maxlength="40" /></label>
+        ${emailField}
+        <label class="auth-field">Password <small>At least 6 characters</small><input name="password" type="password" autocomplete="new-password" minlength="6" required /></label>
+        ${msg}
+        <button type="submit" class="btn btn--primary">Create account</button>
+      </form>`;
+  } else if (authMode === 'forgot') {
+    html = `<h2 id="authTitle">Reset your password</h2><p class="auth-sub">Enter your email and we'll send you a link to set a new password.</p>
+      <form class="auth-form" data-auth-form="forgot">
+        ${emailField}
+        ${msg}
+        <button type="submit" class="btn btn--primary">Send reset link</button>
+        <button type="button" class="auth-link" data-auth-mode="signin">← Back to sign in</button>
+      </form>`;
+  } else if (authMode === 'recovery') {
+    html = `<h2 id="authTitle">Set a new password</h2><p class="auth-sub">Choose a new password for ${esc(state.user?.email || 'your account')}.</p>
+      <form class="auth-form" data-auth-form="recovery">
+        <label class="auth-field">New password <small>At least 6 characters</small><input name="password" type="password" autocomplete="new-password" minlength="6" required /></label>
+        ${msg}
+        <button type="submit" class="btn btn--primary">Save new password</button>
+      </form>`;
+  } else if (authMode === 'account' && state.user) {
+    const n = state.watchlist.length;
+    html = `<h2 id="authTitle">Your account</h2><p class="auth-sub">Your watchlist is saved to your account.</p>
+      <div class="auth-account">
+        <div class="auth-account__row">
+          <span class="account-btn__avatar" aria-hidden="true">${esc(displayName()[0]?.toUpperCase() || '★')}</span>
+          <div><div class="auth-account__email">${esc(state.user.email)}</div><div class="muted">${n} show${n === 1 ? '' : 's'} on your watchlist</div></div>
+        </div>
+        ${msg}
+        <button type="button" class="btn btn--ghost" data-auth-mode="recovery">Change password</button>
+        <button type="button" class="btn btn--primary" data-auth-action="signout">Sign out</button>
+      </div>`;
+  }
+  els.authBody.innerHTML = html;
+}
+
+async function handleAuthSubmit(form) {
+  const kind = form.dataset.authForm;
+  const data = Object.fromEntries(new FormData(form));
+  const email = (data.email || '').trim();
+  const btn = form.querySelector('button[type="submit"]');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Please wait…';
+  authMessage('');
+  try {
+    if (kind === 'signin') {
+      await auth.signIn(email, data.password);
+      closeAuth();
+    } else if (kind === 'signup') {
+      const { needsConfirmation } = await auth.signUp(email, data.password, (data.firstName || '').trim());
+      if (needsConfirmation) {
+        form.reset();
+        authMessage(`Almost done! We sent a confirmation link to ${email}. Click it to finish creating your account.`, 'ok');
+      } else closeAuth();
+    } else if (kind === 'forgot') {
+      await auth.sendPasswordReset(email);
+      authMessage(`If an account exists for ${email}, a reset link is on its way.`, 'ok');
+    } else if (kind === 'recovery') {
+      await auth.updatePassword(data.password);
+      closeAuth();
+      toast('Password updated ✓');
+    }
+  } catch (e) {
+    authMessage(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+// Merge any shows followed while signed out into the account, then use the account's list.
+async function syncWatchlist() {
+  const guest = loadWatchlist();
+  try {
+    const remote = await auth.fetchWatchlist();
+    const missing = guest.filter(g => !remote.some(r => r.id === g.id));
+    if (missing.length) {
+      await auth.saveWatchItems(missing);
+      toast(`Added ${missing.length} show${missing.length === 1 ? '' : 's'} to your account's watchlist`);
+    }
+    store('ata.watchlist.v2', []); // guest list now lives in the account
+    state.watchlist = [...remote, ...missing];
+  } catch (e) {
+    toast(`Couldn't load your saved watchlist: ${e.message}`);
+  }
+  watchlistChanged();
+}
+
+function onAuthChange(event, session) {
+  const prevId = state.user?.id;
+  state.user = session?.user || null;
+  renderAccountButton();
+  renderGreeting();
+  if (event === 'PASSWORD_RECOVERY') { openAuth('recovery'); return; }
+  if (state.user && state.user.id !== prevId) {
+    if (event === 'SIGNED_IN' && prevId === undefined && !/type=(signup|magiclink|recovery)/.test(initialHash)) {
+      toast(`Signed in as ${state.user.email}`);
+    }
+    syncWatchlist();
+  } else if (!state.user && prevId) {
+    state.watchlist = loadWatchlist();
+    watchlistChanged();
+    toast('Signed out');
+  }
+  if (els.authDialog.open && authMode === 'account') renderAuth();
+}
+
+function initAccount() {
+  renderAccountButton();
+  els.accountBtn.addEventListener('click', () => openAuth());
+  els.authDialog.addEventListener('click', e => {
+    if (e.target === els.authDialog) { closeAuth(); return; } // backdrop click
+    const t = e.target.closest('[data-auth-mode], [data-auth-close], [data-auth-action]');
+    if (!t) return;
+    if (t.dataset.authMode) { authMode = t.dataset.authMode; renderAuth(); els.authBody.querySelector('input')?.focus(); }
+    else if ('authClose' in t.dataset) closeAuth();
+    else if (t.dataset.authAction === 'signout') {
+      auth.signOut().then(closeAuth).catch(e => authMessage(e.message));
+    }
+  });
+  els.authDialog.addEventListener('submit', e => {
+    e.preventDefault();
+    handleAuthSubmit(e.target);
+  });
+
+  // Messages for links clicked in auth emails.
+  const params = new URLSearchParams(initialHash.replace(/^#/, ''));
+  if (params.get('error_description')) {
+    const expired = /expired|invalid/i.test(params.get('error_code') || params.get('error_description'));
+    toast(expired ? 'That email link has expired. Please request a new one.' : params.get('error_description'));
+    history.replaceState(null, '', location.pathname + location.search);
+  } else if (params.get('type') === 'signup') {
+    setTimeout(() => toast('Email confirmed! You’re signed in 🎉'), 400);
+  }
+
+  auth.initAuth(onAuthChange).catch(() => {
+    els.accountBtn.title = 'Sign-in is unavailable right now';
+  });
+}
+
 // ---------- Routing ----------
 function route() {
   const view = (location.hash.replace('#', '') || 'news');
@@ -719,6 +948,7 @@ function initEvents() {
 
 // ---------- Boot ----------
 initTheme();
+initAccount();
 renderGreeting();
 initWeather();
 initSearch();

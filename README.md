@@ -10,6 +10,7 @@ The latest anime news, announcements, trailers, delays, streaming updates and se
 - **Search**: look up news about any anime. AniList finds the show and all its titles (English, romaji, Japanese) so matching stories are found, with links to the ANN and MAL archives for older coverage.
 - **Seasonal lineup**: what's airing now and what's coming next, with scores, genres and broadcast times.
 - **Watchlist**: follow your favorite shows and see news about only them. Saved in your browser.
+- **Accounts (email login)**: sign up, sign in, forgot/reset password and change password, powered by Supabase Auth. Signed-in users' watchlists are saved to their account and follow them to any device. Shows followed before signing in are merged into the account.
 - **Greeting**: a time-of-day greeting for Latrell (in English and Japanese).
 - **Live weather** from Open-Meteo. Defaults to Boca Raton (FAU), and you can change the city.
 - **Themes**: Light, Dark or System (follows your device).
@@ -23,6 +24,14 @@ The latest anime news, announcements, trailers, delays, streaming updates and se
 | [MyAnimeList News RSS](https://myanimelist.net/rss/news.xml) | News feed (with images) |
 | [AniList GraphQL API](https://anilist.co/graphiql) | Search, seasonal lineups, show artwork |
 | [Open-Meteo](https://open-meteo.com/) | Live weather and city search |
+| [Supabase](https://supabase.com/) (project `All Things Anime`) | Email login and saved watchlists |
+
+## Supabase setup
+
+- **Database**: a `public.watchlist` table (`user_id`, `anime_id`, `title`, `image`, `titles`, `created_at`) with row-level security, so each user can only read and change their own rows.
+- **Keys**: `js/auth.js` contains the project URL and the *publishable* key. It's designed to be public; RLS protects the data. Never put the `service_role`/secret key in the site.
+- **Required dashboard setting**: Authentication → URL Configuration → set **Site URL** to the Netlify URL and add `https://<your-site>.netlify.app/**` under **Redirect URLs**, so confirmation and password-reset emails link back to the site.
+- **Email limits**: Supabase's built-in email sender only sends a few emails per hour (sign-up confirmations and password resets). Signing in with a password sends no email. For more volume, add custom SMTP under Authentication → Emails, or turn off "Confirm email" under Authentication → Sign In / Providers → Email.
 
 ## Deploy to Netlify
 
@@ -49,6 +58,7 @@ index.html        # markup and layout
 css/styles.css    # theme tokens (light/dark), responsive layout
 js/api.js         # RSS news, AniList and Open-Meteo data layer (with caching)
 netlify/functions/feed.mjs  # server-side RSS relay at /api/feed
-js/app.js         # state, rendering, search, watchlist, themes, greeting, weather
+js/app.js         # state, rendering, search, watchlist, account UI, themes, greeting, weather
+js/auth.js        # Supabase email login + watchlist sync
 netlify.toml      # Netlify config
 ```
